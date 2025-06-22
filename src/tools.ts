@@ -1,11 +1,11 @@
 /**
- * Tool definitions for the AI chat agent
+ * Tool definitions for the AI RealEstateAgent agent
  * Tools can either require human confirmation or execute automatically
  */
-import { tool } from "ai";
+import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 
-import type { Chat } from "./server";
+import type { RealEstateAgent } from "./server";
 import { getCurrentAgent } from "agents";
 import { unstable_scheduleSchema } from "agents/schedule";
 
@@ -39,7 +39,7 @@ const scheduleTask = tool({
   parameters: unstable_scheduleSchema,
   execute: async ({ when, description }) => {
     // we can now read the agent context from the ALS store
-    const { agent } = getCurrentAgent<Chat>();
+    const { agent } = getCurrentAgent<RealEstateAgent>();
 
     function throwError(msg: string): string {
       throw new Error(msg);
@@ -73,7 +73,7 @@ const getScheduledTasks = tool({
   description: "List all tasks that have been scheduled",
   parameters: z.object({}),
   execute: async () => {
-    const { agent } = getCurrentAgent<Chat>();
+    const { agent } = getCurrentAgent<RealEstateAgent>();
 
     try {
       const tasks = agent!.getSchedules();
@@ -98,7 +98,7 @@ const cancelScheduledTask = tool({
     taskId: z.string().describe("The ID of the task to cancel"),
   }),
   execute: async ({ taskId }) => {
-    const { agent } = getCurrentAgent<Chat>();
+    const { agent } = getCurrentAgent<RealEstateAgent>();
     try {
       await agent!.cancelSchedule(taskId);
       return `Task ${taskId} has been successfully canceled.`;
@@ -113,23 +113,10 @@ const cancelScheduledTask = tool({
  * Export all available tools
  * These will be provided to the AI model to describe available capabilities
  */
-export const tools = {
+export const tools: ToolSet = {
   getWeatherInformation,
   getLocalTime,
   scheduleTask,
   getScheduledTasks,
   cancelScheduledTask,
-};
-
-/**
- * Implementation of confirmation-required tools
- * This object contains the actual logic for tools that need human approval
- * Each function here corresponds to a tool above that doesn't have an execute function
- * NOTE: keys below should match toolsRequiringConfirmation in app.tsx
- */
-export const executions = {
-  getWeatherInformation: async ({ city }: { city: string }) => {
-    console.log(`Getting weather information for ${city}`);
-    return `The weather in ${city} is sunny`;
-  },
 };

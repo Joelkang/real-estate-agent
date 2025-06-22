@@ -1,125 +1,90 @@
 import { routeAgentRequest, type Schedule } from "agents";
-
-import { unstable_getSchedulePrompt } from "agents/schedule";
-
 import { AIChatAgent } from "agents/ai-chat-agent";
-import {
-  createDataStreamResponse,
-  generateId,
-  streamText,
-  type StreamTextOnFinishCallback,
-  type ToolSet,
-} from "ai";
-import { openai } from "@ai-sdk/openai";
+import { tools} from "./tools";
+import  { createDataStreamResponse, streamText, type StreamTextOnFinishCallback ,  type ToolSet } from "ai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { processToolCalls } from "./utils";
-import { tools, executions } from "./tools";
-// import { env } from "cloudflare:workers";
 
-const model = openai("gpt-4o-2024-11-20");
-// Cloudflare AI Gateway
-// const openai = createOpenAI({
-//   apiKey: env.OPENAI_API_KEY,
-//   baseURL: env.GATEWAY_BASE_URL,
-// });
+// Example state type for the agent
+interface ChatState {
+  messageHistory: { id: string; role: string; content: string; createdAt: Date }[];
+}
 
-/**
- * Chat Agent implementation that handles real-time AI chat interactions
- */
-export class Chat extends AIChatAgent<Env> {
-  /**
-   * Handles incoming chat messages and manages the response stream
-   * @param onFinish - Callback function executed when streaming completes
-   */
+export class RealEstateAgent extends AIChatAgent<Env, ChatState> {
+  initialState: ChatState = { messageHistory: [] };
+  gateway = this.env.AI.gateway(this.env.CLOUDFLARE_AI_GATEWAY_ID);
 
+  // Handles incoming chat messages and generates a response using Cloudflare AI Gateway
   async onChatMessage(
     onFinish: StreamTextOnFinishCallback<ToolSet>,
-    options?: { abortSignal?: AbortSignal }
-  ) {
-    // const mcpConnection = await this.mcp.connect(
-    //   "https://path-to-mcp-server/sse"
-    // );
-
-    // Collect all tools, including MCP tools
-    const allTools = {
-      ...tools,
-      ...this.mcp.unstable_getAITools(),
-    };
-
-    // Create a streaming response that handles both text and tool outputs
+    options?: { abortSignal: AbortSignal | undefined }
+  ): Promise<Response | undefined> {
     const dataStreamResponse = createDataStreamResponse({
       execute: async (dataStream) => {
-        // Process any pending tool calls from previous messages
-        // This handles human-in-the-loop confirmations for tools
-        const processedMessages = await processToolCalls({
-          messages: this.messages,
-          dataStream,
-          tools: allTools,
-          executions,
-        });
+        // Utility function to handle tools that require human confirmation
+        // Checks for confirmation in last message and then runs associated tool
+        const processedMessages = await processToolCalls(
+          {
+            dataStream,
+            messages: this.messages,
+            tools,
+          },
+          {
+            // type-safe object for tools without an execute function
+            getWeatherInformation: async ({ city }) => {
+              const conditions = ["sunny", "cloudy", "rainy", "snowy"];
+              return `The weather in ${city} is ${
+                conditions[Math.floor(Math.random() * conditions.length)]
+              }.`;
+            },
+          }
+        );
 
-        // Stream the AI response using GPT-4
+
+        const google = createGoogleGenerativeAI({
+          apiKey: this.env.GOOGLE_AI_STUDIO_TOKEN,
+          baseURL: `${await this.gateway.getUrl("google-ai-studio")}/v1beta`,
+          headers: {
+            // "x-goog-api-key": this.env.GOOGLE_AI_STUDIO_TOKEN,
+            'cf-aig-authorization':`Bearer ${this.env.CLOUDFLARE_AI_GATEWAY_API_TOKEN}`,
+          }
+        });
+        const model = google.chat(this.env.GOOGLE_AI_MODEL)
+
+
         const result = streamText({
           model,
-          system: `You are a helpful assistant that can do various tasks... 
-
-${unstable_getSchedulePrompt({ date: new Date() })}
-
-If the user asks to schedule a task, use the schedule tool to schedule the task.
-`,
           messages: processedMessages,
-          tools: allTools,
-          onFinish: async (args) => {
-            onFinish(
-              args as Parameters<StreamTextOnFinishCallback<ToolSet>>[0]
-            );
-            // await this.mcp.closeConnection(mcpConnection.id);
+          tools,
+          onError(e) {
+            console.log('error' , e)
           },
-          onError: (error) => {
-            console.error("Error while streaming:", error);
-          },
-          maxSteps: 10,
+          onFinish,
         });
-
-        // Merge the AI response stream with tool execution outputs
+  
         result.mergeIntoDataStream(dataStream);
       },
     });
 
     return dataStreamResponse;
+  
   }
+
+  // Example: handle a scheduled task
   async executeTask(description: string, task: Schedule<string>) {
-    await this.saveMessages([
-      ...this.messages,
-      {
-        id: generateId(),
-        role: "user",
-        content: `Running scheduled task: ${description}`,
-        createdAt: new Date(),
-      },
-    ]);
+    this.setState({
+      ...this.state,
+      messageHistory: [
+        ...this.state.messageHistory,
+        { id: crypto.randomUUID(), role: "system", content: `Running scheduled task: ${description}`, createdAt: new Date() },
+      ],
+    });
   }
 }
 
-/**
- * Worker entry point that routes incoming requests to the appropriate handler
- */
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/check-open-ai-key") {
-      const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
-      return Response.json({
-        success: hasOpenAIKey,
-      });
-    }
-    if (!process.env.OPENAI_API_KEY) {
-      console.error(
-        "OPENAI_API_KEY is not set, don't forget to set it locally in .dev.vars, and use `wrangler secret bulk .dev.vars` to upload it to production"
-      );
-    }
     return (
-      // Route the request to our agent or return 404 if not found
       (await routeAgentRequest(request, env)) ||
       new Response("Not found", { status: 404 })
     );

@@ -12,15 +12,20 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "Chat",
-        "class_name": "Chat",
+        "name": "RealEstateAgent",
+        "class_name": "RealEstateAgent",
       },
     ],
+  },
+  "ai": {
+    "binding": "AI"
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["Chat"],
+      "new_sqlite_classes": [
+        "RealEstateAgent"
+      ],
     },
   ],
 }
